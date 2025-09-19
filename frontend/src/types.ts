@@ -1,0 +1,1 @@
+export type SectionMap = Record<string, string | string[]>;

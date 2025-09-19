@@ -1,323 +1,223 @@
 import { useState } from "react";
-import type { ChangeEvent } from "react";
-import jsPDF from "jspdf";
-import { saveAs } from "file-saver";
-import { Document, Packer, Paragraph } from "docx";
 
-import IntroSlide from "../components/templates/professional/IntroSlide";
-import ProblemSlide from "../components/templates/professional/ProblemSlide";
-import SolutionSlide from "../components/templates/professional/SolutionSlide";
-import TimelineSlide from "../components/templates/professional/TimelineSlide";
-import BudgetSlide from "../components/templates/professional/BudgetSlide";
-import USPSlide from "../components/templates/professional/USPSlide";
-
-
-const normalizeTimeline = (arr: string[]): { phase: string; duration: string; details: string }[] => {
-  return arr.map((line, i) => {
-    // Try to split by colon or dash for duration/details if available
-    let duration = "";
-    let details = line;
-    if (line.includes(":")) {
-      const parts = line.split(":");
-      duration = parts[0].trim();
-      details = parts.slice(1).join(":").trim();
-    }
-    return { phase: `Phase ${i + 1}`, duration, details };
-  });
-};
-
-const normalizeBudget = (arr: string[]): { label: string; value: number }[] => {
-  return arr.map((b) => {
-    const [label, value] = b.split(":").map((s) => s.trim());
-    return { label, value: parseInt(value.replace(/[^\d]/g, "")) || 0 };
-  });
-};
-
-const normalizeUSP = (arr: string[]): { title: string; description?: string }[] => {
-  return arr.map((p) => ({ title: p }));
-};
-
+// --- Helper Functions ---
+// All necessary helpers are included directly in this file for simplicity and reliability.
 
 type SectionMap = Record<string, string | string[]>;
 
 const parseMarkdown = (markdown: string): SectionMap => {
-  const lines = markdown.split("\n");
-  const sections: SectionMap = {};
-  let currentKey: string | null = null;
-  let buffer: string[] = [];
+    const lines = markdown.split("\n").filter(line => line.trim() !== '');
+    const sections: SectionMap = {};
+    let currentKey: string | null = null;
+    let buffer: string[] = [];
 
-  const flushBuffer = () => {
-  if (currentKey) {
-    const text = buffer.join("\n").trim();
-    // If any line starts with "- ", treat as array
-    if (buffer.some((l) => l.startsWith("- "))) {
-      sections[currentKey] = buffer
-        .filter((l) => l.startsWith("- "))
-        .map((l) => l.replace(/^- /, "").trim());
-    } else if (buffer.length > 1) {
-      // multiple lines without "-", treat each line as array
-      sections[currentKey] = buffer.map((l) => l.trim()).filter((l) => l);
-    } else {
-      // single line
-      sections[currentKey] = text;
+    const flushBuffer = () => {
+        if (currentKey && buffer.length > 0) {
+            // Check for lists (lines starting with * or -)
+            if (buffer.some(l => l.trim().startsWith('* ') || l.trim().startsWith('- '))) {
+                sections[currentKey] = buffer.map(l => l.trim().replace(/^[* -]\s*/, '')).filter(Boolean);
+            } else {
+                sections[currentKey] = buffer.join("\n").trim();
+            }
+        }
+        buffer = [];
+    };
+
+    for (const line of lines) {
+        const headingMatch = line.match(/^##?\s+(.*)/);
+        if (headingMatch) {
+            flushBuffer();
+            currentKey = headingMatch[1].trim();
+        } else if (currentKey) {
+            buffer.push(line);
+        }
     }
-  }
-  buffer = [];
+    flushBuffer();
+    return sections;
+};
+
+// --- Normalization Functions ---
+// These are now back to handle specific data formats gracefully.
+
+const normalizeTimeline = (content: string | string[]): { phase: string; details: string }[] => {
+    const lines = Array.isArray(content) ? content : [content];
+    return lines.map((line, i) => {
+        if (!line) return null;
+        // Simple split by the first colon for details
+        const parts = line.split(/:(.*)/s);
+        const phase = parts[0].trim() || `Phase ${i + 1}`;
+        const details = (parts[1] || 'Details to be determined.').trim();
+        return { phase, details };
+    }).filter(Boolean) as { phase: string; details: string }[];
+};
+
+const normalizeBudget = (content: string | string[]): { item: string; cost: string }[] => {
+    const lines = Array.isArray(content) ? content : [content];
+    return lines.map(line => {
+        if (!line) return null;
+        const parts = line.split(/:(.*)/s);
+        const item = parts[0].trim();
+        const cost = (parts[1] || 'TBD').trim();
+        return { item, cost };
+    }).filter(Boolean) as { item: string; cost: string }[];
+};
+
+const normalizeUSP = (content: string | string[]): { title: string }[] => {
+    const lines = Array.isArray(content) ? content : [content];
+    return lines.map(line => {
+        if (!line || !line.trim()) return null;
+        return { title: line.trim() };
+    }).filter(Boolean) as { title: string }[];
 };
 
 
-  for (const line of lines) {
-    const headingMatch = line.match(/^##?\s+(.*)/);
-    if (headingMatch) {
-      flushBuffer();
-      currentKey = headingMatch[1].trim();
-    } else if (currentKey) {
-      buffer.push(line);
-    }
-  }
-  flushBuffer();
-  return sections;
-};
-
+// --- The Main Dashboard Component ---
 const Dashboard: React.FC = () => {
-  const [goal, setGoal] = useState<string>("");
-  const [audience, setAudience] = useState<string>("");
-  const [tone, setTone] = useState<string>("Formal");
-  const [budget, setBudget] = useState<string>("");
-  const [timeline, setTimeline] = useState<string>("");
-  const [usp, setUSP] = useState<string>("");
-  const [proposalText, setProposalText] = useState<string>("");
-  const [loading, setLoading] = useState<boolean>(false);
+    const [goal, setGoal] = useState<string>("");
+    const [audience, setAudience] = useState<string>("");
+    const [tone, setTone] = useState<string>("Formal");
+    const [budget, setBudget] = useState<string>("");
+    const [timeline, setTimeline] = useState<string>("");
+    const [usp, setUSP] = useState<string>("");
+    const [sections, setSections] = useState<SectionMap | null>(null);
+    const [loading, setLoading] = useState<boolean>(false);
+    const [error, setError] = useState<string | null>(null);
 
-  const handleGoalChange = (e: ChangeEvent<HTMLTextAreaElement>) =>
-    setGoal(e.target.value);
-  const handleAudienceChange = (e: ChangeEvent<HTMLInputElement>) =>
-    setAudience(e.target.value);
-  const handleToneChange = (e: ChangeEvent<HTMLSelectElement>) =>
-    setTone(e.target.value);
-  const handleBudgetChange = (e: ChangeEvent<HTMLInputElement>) =>
-    setBudget(e.target.value);
-  const handleTimelineChange = (e: ChangeEvent<HTMLInputElement>) =>
-    setTimeline(e.target.value);
-  const handleUSPChange = (e: ChangeEvent<HTMLTextAreaElement>) =>
-    setUSP(e.target.value);
+    const handleSubmit = async () => {
+        setLoading(true);
+        setSections(null);
+        setError(null);
+        try {
+            const response = await fetch("http://localhost:5000/generate", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ goal, audience, tone, budget, timeline, usp }),
+            });
+            if (!response.ok) throw new Error(`Server error: ${response.statusText}`);
+            const data = await response.json();
+            if (data.proposal) {
+                setSections(parseMarkdown(data.proposal));
+            } else {
+                setError("No proposal content was generated.");
+            }
+        } catch (err: unknown) {
+            if (err instanceof Error) {
+                setError(err.message);
+            } else {
+                setError("An unknown error occurred.");
+            }
+        } finally {
+            setLoading(false);
+        }
+    };
 
-  const handleExportPDF = () => {
-    const doc = new jsPDF();
-    doc.text(proposalText, 10, 10);
-    doc.save("proposal.pdf");
-  };
-
-  const handleExportDOCX = async () => {
-    const doc = new Document({
-      sections: [
-        {
-          properties: {},
-          children: [new Paragraph(proposalText)],
-        },
-      ],
-    });
-    const blob = await Packer.toBlob(doc);
-    saveAs(blob, "proposal.docx");
-  };
-
-  const handleSubmit = async () => {
-    try {
-      setLoading(true);
-      setProposalText(""); // clear old text
-      const response = await fetch("http://localhost:5000/generate", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ goal, audience, tone, budget, timeline, usp }),
-      });
-
-      const data = await response.json();
-      setProposalText(data.proposal || "⚠️ No proposal generated.");
-    } catch (err) {
-      console.error("Error generating proposal:", err);
-      setProposalText("❌ Error generating proposal. Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-gradient-to-b from-pink-50 to-pink-200 flex items-center justify-center p-4">
-      <div className="bg-white shadow-xl rounded-2xl p-8 max-w-lg w-full">
-        <h1 className="text-4xl font-bold text-pink-600 mb-6 text-center">
-          Proposal Devta
-        </h1>
-
-        <div className="space-y-5">
-          {/* Goal */}
-          <div>
-            <label className="block font-semibold text-gray-700 mb-1">
-              🎯 Goal
-            </label>
-            <textarea
-              value={goal}
-              onChange={handleGoalChange}
-              placeholder="What is your proposal about?"
-              className="w-full p-3 border border-pink-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-400 focus:border-pink-400 transition"
-              rows={3}
-            />
-          </div>
-
-          {/* Audience */}
-          <div>
-            <label className="block font-semibold text-gray-700 mb-1">
-              👥 Target Audience
-            </label>
-            <input
-              type="text"
-              value={audience}
-              onChange={handleAudienceChange}
-              placeholder="Who is this proposal for?"
-              className="w-full p-3 border border-pink-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-400 focus:border-pink-400 transition"
-            />
-          </div>
-
-          {/* Tone */}
-          <div>
-            <label className="block font-semibold text-gray-700 mb-1">
-              📝 Tone
-            </label>
-            <select
-              value={tone}
-              onChange={handleToneChange}
-              className="w-full p-3 border border-pink-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-400 focus:border-pink-400 transition"
-            >
-              <option>Formal</option>
-              <option>Persuasive</option>
-              <option>Concise</option>
-              <option>Friendly</option>
-            </select>
-          </div>
-
-          {/* Budget */}
-          <div>
-            <label className="block font-semibold text-gray-700 mb-1">
-              💰 Budget
-            </label>
-            <input
-              type="text"
-              value={budget}
-              onChange={handleBudgetChange}
-              placeholder="e.g. $5,000 or ₹3,00,000"
-              className="w-full p-3 border border-pink-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-400 focus:border-pink-400 transition"
-            />
-          </div>
-
-          {/* Timeline */}
-          <div>
-            <label className="block font-semibold text-gray-700 mb-1">
-              ⏳ Timeline
-            </label>
-            <input
-              type="text"
-              value={timeline}
-              onChange={handleTimelineChange}
-              placeholder="e.g. 3 months, Q4 2025"
-              className="w-full p-3 border border-pink-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-400 focus:border-pink-400 transition"
-            />
-          </div>
-
-          {/* USP */}
-          <div>
-            <label className="block font-semibold text-gray-700 mb-1">
-              🌟 Unique Selling Points
-            </label>
-            <textarea
-              value={usp}
-              onChange={handleUSPChange}
-              placeholder="What makes your proposal unique?"
-              className="w-full p-3 border border-pink-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-400 focus:border-pink-400 transition"
-              rows={3}
-            />
-          </div>
-
-          {/* Generate Button */}
-          <button
-            onClick={handleSubmit}
-            className="w-full bg-pink-500 hover:bg-pink-600 text-white font-bold py-3 rounded-xl transition shadow-lg hover:shadow-xl"
-            disabled={loading}
-          >
-            {loading ? "Generating..." : "Generate Proposal"}
-          </button>
-
-          {/* Proposal Output */}
-          {proposalText && (
-  <div className="mt-6 p-4 border border-pink-200 bg-pink-50 rounded-lg">
-    {(() => {
-      const sections = parseMarkdown(proposalText);
-
-      return (
-        <>
-          <IntroSlide
-            title={(sections["Title"] as string) || "Untitled Proposal"}
-            subtitle={(sections["Executive Summary"] as string) || ""}
-          />
-
-          <ProblemSlide
-            problems={Array.isArray(sections["Problem Statement"])
-              ? (sections["Problem Statement"] as string[])
-              : [(sections["Problem Statement"] as string) || ""]}
-          />
-
-          <SolutionSlide
-            solutions={Array.isArray(sections["Proposed Solution"])
-              ? (sections["Proposed Solution"] as string[])
-              : [(sections["Proposed Solution"] as string) || ""]}
-          />
-
-          <TimelineSlide
-  timeline={normalizeTimeline(
-    Array.isArray(sections["Timeline"])
-      ? (sections["Timeline"] as string[])
-      : [(sections["Timeline"] as string) || ""]
-  )}
-/>
-
-<BudgetSlide
-  items={normalizeBudget(
-    Array.isArray(sections["Budget"])
-      ? (sections["Budget"] as string[])
-      : [(sections["Budget"] as string) || ""]
-  )}
-/>
-
-<USPSlide
-  points={normalizeUSP(
-    Array.isArray(sections["Unique Selling Points"])
-      ? (sections["Unique Selling Points"] as string[])
-      : [(sections["Unique Selling Points"] as string) || ""]
-  )}
-/>
-                    <div className="mt-4 flex gap-3">
-                      <button
-                        onClick={handleExportPDF}
-                        className="flex-1 bg-blue-500 hover:bg-blue-600 text-white py-2 rounded-lg shadow"
-                      >
-                        Export as PDF
-                      </button>
-                      <button
-                        onClick={handleExportDOCX}
-                        className="flex-1 bg-green-500 hover:bg-green-600 text-white py-2 rounded-lg shadow"
-                      >
-                        Export as DOCX
-                      </button>
-                    </div>
-                  </>
-                );
-              })()}
-            </div>
-          )}
+    // Generic slide wrapper component defined directly inside for simplicity
+    const SlideWrapper: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
+        <div className="w-full aspect-video bg-white rounded-xl shadow-2xl flex flex-col p-8 md:p-12 font-sans">
+            <header className="flex-shrink-0 border-b-2 border-gray-100 pb-4 mb-6">
+                <h2 className="text-2xl font-bold text-gray-800 text-center">{title}</h2>
+            </header>
+            <main className="flex-grow text-gray-700 text-lg text-left overflow-auto">
+                {children}
+            </main>
         </div>
-      </div>
-    </div>
-  );
+    );
+
+    // --- The Render Logic ---
+    return (
+        <div className="min-h-screen bg-gray-100 p-4 sm:p-6 lg:p-8">
+            <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8">
+                {/* --- Input Form Column --- */}
+                <div className="lg:col-span-1 bg-white p-6 sm:p-8 rounded-xl shadow-lg h-fit">
+                    <h1 className="text-3xl font-bold text-gray-800 mb-6 text-center">Proposal Devta</h1>
+                    <div className="space-y-4">
+                        <div><label className="block font-semibold text-gray-700 mb-1">🎯 Goal</label><textarea value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="e.g., Launch a new marketing campaign" className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 transition" rows={2}/></div>
+                        <div><label className="block font-semibold text-gray-700 mb-1">👥 Target Audience</label><input type="text" value={audience} onChange={(e) => setAudience(e.target.value)} placeholder="e.g., Tech-savvy millennials" className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 transition"/></div>
+                        <div><label className="block font-semibold text-gray-700 mb-1">📝 Tone</label><select value={tone} onChange={(e) => setTone(e.target.value)} className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 transition"><option>Formal</option><option>Persuasive</option><option>Concise</option><option>Friendly</option></select></div>
+                        <div><label className="block font-semibold text-gray-700 mb-1">💰 Budget</label><input type="text" value={budget} onChange={(e) => setBudget(e.target.value)} placeholder="e.g., $10,000" className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 transition"/></div>
+                        <div><label className="block font-semibold text-gray-700 mb-1">⏳ Timeline</label><input type="text" value={timeline} onChange={(e) => setTimeline(e.target.value)} placeholder="e.g., 6 weeks" className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 transition"/></div>
+                        <div><label className="block font-semibold text-gray-700 mb-1">🌟 Unique Selling Points</label><textarea value={usp} onChange={(e) => setUSP(e.target.value)} placeholder="e.g., AI-powered analytics" className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 transition" rows={2}/></div>
+                        <button onClick={handleSubmit} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition-transform transform hover:scale-105 shadow-lg disabled:bg-gray-400" disabled={loading}>{loading ? "Generating..." : "Generate Proposal"}</button>
+                    </div>
+                </div>
+
+                {/* --- Output Column (Now 2 columns wide) --- */}
+                <div className="lg:col-span-2 space-y-8">
+                    {loading && <div className="text-center text-gray-500">Generating your professional proposal...</div>}
+                    {error && <div className="text-center text-red-500 p-4 bg-red-100 rounded-lg">Error: {error}</div>}
+                    {!loading && !sections && !error && <div className="text-center text-gray-400 pt-24">Your generated slides will appear here.</div>}
+                    
+                    {sections && (
+                        <>
+                            {sections["Title"] && (
+                                <SlideWrapper title={sections["Title"] as string}>
+                                    <p className="whitespace-pre-wrap text-center text-xl">{sections["Executive Summary"]}</p>
+                                </SlideWrapper>
+                            )}
+                             {sections["Problem Statement"] && (
+                                <SlideWrapper title="Problem Statement">
+                                    <ul className="space-y-4 list-disc pl-5">
+                                        {(Array.isArray(sections["Problem Statement"]) ? sections["Problem Statement"] : [sections["Problem Statement"]]).map((item, index) => <li key={index}>{item}</li>)}
+                                    </ul>
+                                </SlideWrapper>
+                            )}
+                             {sections["Proposed Solution"] && (
+                                <SlideWrapper title="Proposed Solution">
+                                    <ul className="space-y-4 list-disc pl-5">
+                                         {(Array.isArray(sections["Proposed Solution"]) ? sections["Proposed Solution"] : [sections["Proposed Solution"]]).map((item, index) => <li key={index}>{item}</li>)}
+                                    </ul>
+                                </SlideWrapper>
+                            )}
+                             {sections["Timeline"] && (
+                                <SlideWrapper title="Timeline">
+                                    <div className="space-y-6">
+                                        {normalizeTimeline(sections["Timeline"]).map(({ phase, details }, index) => (
+                                            <div key={index} className="flex items-start">
+                                                <div className="font-bold text-blue-600 w-1/4">{phase}</div>
+                                                <div className="w-3/4">{details}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </SlideWrapper>
+                            )}
+                            {sections["Budget"] && (
+                                <SlideWrapper title="Budget">
+                                    <table className="w-full text-left">
+                                        <thead>
+                                            <tr className="border-b-2 border-gray-200">
+                                                <th className="pb-2 w-3/4">Item</th>
+                                                <th className="pb-2 w-1/4">Cost</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {normalizeBudget(sections["Budget"]).map(({ item, cost }, index) => (
+                                                <tr key={index} className="border-b border-gray-100">
+                                                    <td className="py-3">{item}</td>
+                                                    <td className="py-3">{cost}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </SlideWrapper>
+                            )}
+                             {sections["Unique Selling Points"] && (
+                                <SlideWrapper title="Unique Selling Points">
+                                    <div className="grid md:grid-cols-2 gap-6">
+                                        {normalizeUSP(sections["Unique Selling Points"]).map(({ title }, index) => (
+                                            <div key={index} className="bg-gray-50 p-4 rounded-lg">
+                                                <h3 className="font-semibold text-blue-700">✔ {title}</h3>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </SlideWrapper>
+                            )}
+                        </>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
 };
 
 export default Dashboard;
+

@@ -1,6 +1,14 @@
+
+// import Dashboard from "./Dashboard";
+
+// function App() {
+//   return <Dashboard />;
+// }
+
+// export default App;
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import Home from "./pages/Home";
-import Dashboard from "./pages/dashboard";
+import Dashboard from "./pages/Dashboard";
 
 function App() {
   return (
