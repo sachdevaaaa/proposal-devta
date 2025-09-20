@@ -4,13 +4,17 @@ import SlideWrapper from "../../ui/SlideWrapper";
 interface IntroSlideProps {
   title: string;
   subtitle?: string;
+  pageNumber: number;
 }
 
-const IntroSlide: React.FC<IntroSlideProps> = ({ title, subtitle }) => {
+const IntroSlide: React.FC<IntroSlideProps> = ({ title, subtitle, pageNumber }) => {
   return (
-    <SlideWrapper title={title} subtitle={subtitle}>
-      {/* Decorative bar */}
-      <div className="mt-8 w-40 h-1 bg-blue-500 rounded-full mx-auto"></div>
+    <SlideWrapper slideTitle={title} pageNumber={pageNumber}>
+      <div className="flex flex-col items-center justify-center h-full text-center">
+        <p className="text-xl text-gray-700 max-w-3xl leading-relaxed">
+          {subtitle}
+        </p>
+      </div>
     </SlideWrapper>
   );
 };
