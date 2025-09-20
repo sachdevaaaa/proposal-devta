@@ -1,5 +1,5 @@
 import React from "react";
-import SlideWrapper from "../../ui/SlideWrapper";
+import SlideWrapper from "../../ui/SlideWrapper.tsx";
 
 interface IntroSlideProps {
   title: string;
@@ -20,3 +20,4 @@ const IntroSlide: React.FC<IntroSlideProps> = ({ title, subtitle, pageNumber }) 
 };
 
 export default IntroSlide;
+

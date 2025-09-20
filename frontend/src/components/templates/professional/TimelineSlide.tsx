@@ -17,7 +17,7 @@ const TimelineSlide: React.FC<TimelineSlideProps> = ({ timeline, rawText, pageNu
   return (
     <SlideWrapper slideTitle="Project Timeline" pageNumber={pageNumber}>
       <div className="w-full">
-        {timeline && timeline.length > 0 ? (
+        {timeline && timeline.length > 0 && timeline[0].details !== 'Details to be determined.' ? (
           <div className="relative pl-6">
             <div className="absolute left-0 top-0 h-full w-0.5 bg-blue-200"></div>
             <div className="space-y-8">
